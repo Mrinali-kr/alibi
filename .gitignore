@@ -4,3 +4,6 @@ dist/
 reports/
 test-results/
 playwright-report/
+.runs/
+.runs/
+.runs/

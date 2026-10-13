@@ -1,0 +1,11 @@
+{
+  "stage": {
+    "baseUrl": "https://s1-bond-scanner.one.phoenix.sustvest.in/",
+    "testData": {
+      "phoneFirstDigits": "01234",
+      "phoneLength": 10,
+      "otp": "1001",
+      "pin": "1001"
+    }
+  }
+}

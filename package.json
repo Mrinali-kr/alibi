@@ -8,6 +8,9 @@
   "engines": {
     "node": ">=24"
   },
+  "scripts": {
+    "test:local": "node scripts/run-local.mjs"
+  },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
     "@types/node": "^26.6.5",
