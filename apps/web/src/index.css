@@ -1,0 +1,26 @@
+@import '@fontsource/geist/300.css';
+@import '@fontsource/geist/400.css';
+@import '@fontsource/geist/500.css';
+@import '@fontsource/geist/600.css';
+@import '@fontsource/geist/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/600.css';
+@import 'material-symbols/outlined.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Graphite + Petal */
+:root {
+  --surface: 17 18 20; --surface-dim: 24 26 29; --surface-low: 32 34 38; --surface-container: 41 44 49; --surface-high: 53 56 62; --lowest: 14 15 17;
+  --outline: 118 123 130; --outline-variant: 60 64 71; --on-surface: 236 232 224; --on-surface-variant: 162 166 172;
+  --ok: 120 190 140; --error: 232 112 100; --warn: 236 160 70;
+  --primary: 248 216 224; --primary-container: 248 216 224; --on-primary: 40 18 26; --secondary: 248 216 224;
+  color-scheme: dark;
+}
+
+.custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgb(var(--outline-variant)); border-radius: 2px; }
+.icon-fill { font-variation-settings: 'FILL' 1; }

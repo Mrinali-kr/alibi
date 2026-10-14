@@ -1,0 +1,6 @@
+{
+  "desktop-chrome": { "label": "Desktop · Chrome", "kind": "desktop", "playwright": "Desktop Chrome" },
+  "desktop-safari": { "label": "Desktop · Safari", "kind": "desktop", "playwright": "Desktop Safari" },
+  "android": { "label": "Android · Chrome", "kind": "mobile", "playwright": "Pixel 7" },
+  "iphone": { "label": "iPhone · Safari", "kind": "mobile", "playwright": "iPhone 15" }
+}

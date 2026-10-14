@@ -13,3 +13,11 @@ reports/
 data/
 .runs/
 .env
+node_modules/
+data/
+reports/
+.runs/
+apps/web/dist/
+test-results/
+playwright-report/
+.env

@@ -7,6 +7,7 @@ import { createRun, getRun, listRuns, markInterrupted, FINISHED, type RunParams 
 import { cancel, kick, runsAhead, queueState } from './queue.ts';
 import { readManifest } from './sources.ts';
 import { logEvents, logFile } from './logs.ts';
+import { deviceList, devicesOf } from './devices.ts';
 
 try {
   process.loadEnvFile(resolve(ROOT, '.env'));
@@ -22,9 +23,17 @@ const app = Fastify({ logger: { level: 'info' } });
 // Reports, traces and the Playwright HTML report for each run: /reports/<run>/html/index.html
 await app.register(fastifyStatic, { root: REPORTS_DIR, prefix: '/reports/' });
 
+// The web UI, once built with `npm run build:web`.
+const WEB_DIR = resolve(ROOT, 'apps/web/dist');
+if (existsSync(WEB_DIR)) {
+  await app.register(fastifyStatic, { root: WEB_DIR, prefix: '/', decorateReply: false });
+} else {
+  app.get('/', async () => 'Alibi runner is up. Build the UI with: npm run build:web');
+}
+
 const runBody = {
   type: 'object',
-  required: ['repo', 'test', 'device'],
+  required: ['repo', 'test'],
   additionalProperties: false,
   properties: {
     env: { type: 'string', default: 'stage' },
@@ -32,14 +41,20 @@ const runBody = {
     repo: { type: 'string' },
     branch: { type: 'string', default: 'main' },
     test: { type: 'string' },
-    device: { type: 'string', enum: ['desktop', 'mobile'] },
+    devices: { type: 'array', items: { type: 'string' }, minItems: 1 },
+    device: { type: 'string' },
     note: { type: 'string' },
     localPath: { type: 'string' },
   },
 } as const;
 
 app.post<{ Body: RunParams }>('/runs', { schema: { body: runBody } }, async (req, reply) => {
-  const run = createRun(req.body, 'local');
+  const devices = devicesOf(req.body);
+  const known = deviceList().map((d) => d.id);
+  const unknown = devices.filter((d) => !known.includes(d));
+  if (unknown.length) return reply.code(400).send({ error: `Unknown device: ${unknown.join(', ')}` });
+  const { device: _old, ...rest } = req.body;
+  const run = createRun({ ...rest, devices }, 'local');
   kick();
   return reply.code(201).send({ run, runsAhead: runsAhead(run.id) });
 });
@@ -99,6 +114,16 @@ app.get<{ Params: { id: string } }>('/runs/:id/log', (req, reply) => {
 });
 
 app.get('/queue', async () => queueState());
+
+app.get('/devices', async () => deviceList());
+
+// Environments for the run form; test data stays on the server.
+app.get('/environments', async () => {
+  const envs: Record<string, { baseUrl: string; apiBaseUrl?: string }> = JSON.parse(
+    readFileSync(resolve(ROOT, 'config/environments.json'), 'utf8'),
+  );
+  return Object.entries(envs).map(([name, e]) => ({ name, baseUrl: e.baseUrl, apiBaseUrl: e.apiBaseUrl }));
+});
 
 app.get<{ Querystring: { repo: string; branch?: string; localPath?: string } }>('/tests', async (req, reply) => {
   const { repo, branch = 'main', localPath } = req.query;

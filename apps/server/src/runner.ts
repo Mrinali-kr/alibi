@@ -6,6 +6,7 @@ import { fetchTests } from './sources.ts';
 import { endLog, writeLog } from './logs.ts';
 import { getRun, setStatus, setSummary, type Run, type RunStatus, type RunSummary } from './db.ts';
 import { buildReport } from './report.ts';
+import { devicesOf, labelOf } from './devices.ts';
 
 const MAX_RUN_MS = 30 * 60 * 1000;
 
@@ -84,7 +85,8 @@ export async function executeRun(run: Run) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   setStatus(id, 'running');
-  writeLog(id, `Run #${id}: ${params.test} on ${params.url ?? params.env} (${params.device}), ${params.repo}@${params.branch}\n`);
+  const devices = devicesOf(params);
+  writeLog(id, `Run #${id}: ${params.test} on ${params.url ?? params.env} (${devices.map(labelOf).join(', ')}), ${params.repo}@${params.branch}\n`);
 
   const finish = (status: RunStatus, summary: RunSummary) => {
     setSummary(id, summary);
@@ -104,7 +106,8 @@ export async function executeRun(run: Run) {
     return finish('couldnt_run', { warnings: [], error: (err as Error).message });
   }
 
-  const args = ['playwright', 'test', file, '--project', params.device];
+  // One worker, so the devices run one after another and the log reads in order.
+  const args = ['playwright', 'test', file, '--workers', '1', ...devices.flatMap((d) => ['--project', d])];
   // Windows needs a shell to find npx; pass one command string there so Node doesn't warn about unescaped args.
   const isWin = process.platform === 'win32';
   const child = spawn(isWin ? `npx ${args.map((a) => `"${a}"`).join(' ')}` : 'npx', isWin ? [] : args, {

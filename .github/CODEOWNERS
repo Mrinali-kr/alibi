@@ -1,0 +1,3 @@
+# Managed by Terraform (github-rbac module). Do NOT edit — .github/CODEOWNERS is owned by @leaf-engineering/org-admins and gated by require_code_owner_review; Terraform reverts drift. Change approvers in Terraform, not here.
+* @leaf-engineering/frontend-maintainers
+/.github/CODEOWNERS @leaf-engineering/org-admins

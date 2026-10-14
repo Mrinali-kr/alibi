@@ -1,13 +1,15 @@
 // Runs an FE repo's /alibi tests from this repo, the same way the server will:
 // copy the tests in, then run Playwright here.
-// Usage: npm run test:local -- <path to FE repo>/alibi [--device desktop|mobile] [--url <base url>]
+// Usage: npm run test:local -- <path to FE repo>/alibi [--device desktop-chrome|desktop-safari|android|iphone] [--url <base url>]
 import { cpSync, existsSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const testsSource = args.find((a) => !a.startsWith('--') && !isValueOf(a));
-const device = valueOf('--device');
+const oldNames = { desktop: 'desktop-chrome', mobile: 'android' };
+const given = valueOf('--device') ?? 'desktop-chrome';
+const device = oldNames[given] ?? given;
 const url = valueOf('--url');
 
 function valueOf(flag) {
@@ -21,7 +23,7 @@ function isValueOf(a) {
 
 if (!testsSource || !existsSync(resolve(testsSource, 'manifest.json'))) {
   console.error('Give the path to an /alibi folder that has a manifest.json, e.g.');
-  console.error('  npm run test:local -- ../bond-scanner/alibi --device desktop');
+  console.error('  npm run test:local -- ../bond-scanner/alibi --device android');
   process.exit(1);
 }
 
@@ -30,7 +32,7 @@ rmSync(runDir, { recursive: true, force: true });
 cpSync(resolve(testsSource), resolve(runDir, 'tests'), { recursive: true });
 
 const pwArgs = ['playwright', 'test'];
-if (device) pwArgs.push('--project', device);
+pwArgs.push('--project', device);
 
 const result = spawnSync('npx', pwArgs, {
   stdio: 'inherit',

@@ -3,6 +3,7 @@ import { relative, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 import type { Run, RunStatus } from './db.ts';
 import { ROOT } from './paths.ts';
+import { devicesOf, labelOf } from './devices.ts';
 
 // ---------- Playwright JSON report (only the parts we read) ----------
 type PwError = { message?: string; stack?: string };
@@ -16,7 +17,7 @@ type PwResult = {
   steps?: PwStep[];
   attachments?: PwAttachment[];
 };
-type PwTest = { annotations?: { type: string; description?: string }[]; results: PwResult[]; status: string };
+type PwTest = { projectName?: string; annotations?: { type: string; description?: string }[]; results: PwResult[]; status: string };
 type PwSpec = { title: string; tests: PwTest[] };
 type PwSuite = { suites?: PwSuite[]; specs?: PwSpec[] };
 type PwReport = {
@@ -34,31 +35,22 @@ type Captured = {
 // ---------- Alibi report (schema v1) ----------
 export type TeamResponsible = 'BE' | 'FE' | null;
 
-export type AlibiReport = {
-  schemaVersion: 1;
-  run: {
-    id: number;
-    requestedBy: string;
-    test: string;
-    target: string;
-    env: string;
-    backend?: string | undefined;
-    testsFrom: string;
-    device: string;
-    note?: string | undefined;
-    startedAt: string | null;
-    finishedAt: string;
-    durationMs: number;
-  };
-  result: {
-    status: RunStatus;
-    teamResponsible: TeamResponsible;
-    label: string;
-    cause: string;
-    service?: string | undefined;
-    endpoint?: string | undefined;
-    component: string;
-  };
+type Result = {
+  status: RunStatus;
+  teamResponsible: TeamResponsible;
+  label: string;
+  cause: string;
+  service?: string | undefined;
+  endpoint?: string | undefined;
+  component: string;
+};
+
+/** What happened on one device. */
+export type DeviceSection = {
+  device: string;
+  label: string;
+  durationMs: number;
+  result: Result;
   steps: { index: number; name: string; status: 'passed' | 'failed' | 'skipped' | 'not reached'; reason?: string | undefined; durationMs: number; screenshot?: string | undefined }[];
   failure?: undefined | {
     step: string;
@@ -71,7 +63,30 @@ export type AlibiReport = {
   };
   warnings: string[];
   notes: { type: string; description?: string }[];
-  files: { trace?: string | undefined; video?: string | undefined; html: string; pdf: string };
+  files: { trace?: string | undefined; video?: string | undefined };
+};
+
+export type AlibiReport = {
+  schemaVersion: 2;
+  run: {
+    id: number;
+    requestedBy: string;
+    test: string;
+    target: string;
+    env: string;
+    backend?: string | undefined;
+    testsFrom: string;
+    devices: string[];
+    note?: string | undefined;
+    startedAt: string | null;
+    finishedAt: string;
+    durationMs: number;
+  };
+  /** The whole run: it passes only if every device passed. */
+  result: Result;
+  devices: DeviceSection[];
+  warnings: string[];
+  files: { html: string; pdf: string };
 };
 
 const stripAnsi = (s = '') => s.replace(/\u001b\[[0-9;]*m/g, '');
@@ -165,14 +180,10 @@ function profileOf(env: string): { baseUrl?: string; apiBaseUrl?: string } {
 
 const toRel = (dir: string, p?: string) => (p ? relative(dir, p).split('\\').join('/') : undefined);
 
-/** Builds report.json and report.pdf for a finished run. Returns the final status. */
-export async function buildReport(run: Run, dir: string): Promise<AlibiReport | null> {
-  const pwFile = resolve(dir, 'playwright-report.json');
-  if (!existsSync(pwFile)) return null;
-  const pw: PwReport = JSON.parse(readFileSync(pwFile, 'utf8'));
-  const test = allTests(pw.suites)[0];
-  if (!test) return null;
+const COMPONENT = 'not available yet (source maps pending)';
 
+/** Turns one device's Playwright test into its report section. */
+function deviceSection(test: PwTest, dir: string): DeviceSection | null {
   const results = test.results;
   const last = results.at(-1);
   if (!last) return null;
@@ -195,7 +206,7 @@ export async function buildReport(run: Run, dir: string): Promise<AlibiReport | 
         return [d.slice(0, at), d.slice(at + 2)] as const;
       }),
   );
-  const steps: AlibiReport['steps'] = named.map((s, i) => ({
+  const steps: DeviceSection['steps'] = named.map((s, i) => ({
     index: i + 1,
     name: s.title,
     status: s.error ? 'failed' : skipped.has(s.title) ? 'skipped' : 'passed',
@@ -210,9 +221,8 @@ export async function buildReport(run: Run, dir: string): Promise<AlibiReport | 
   const passed = last.status === 'passed';
   const flaky = passed && results.length > 1;
 
-  let result: AlibiReport['result'];
-  let failure: AlibiReport['failure'];
-  const component = 'not available yet (source maps pending)';
+  let result: Result;
+  let failure: DeviceSection['failure'];
 
   if (passed) {
     result = {
@@ -224,7 +234,7 @@ export async function buildReport(run: Run, dir: string): Promise<AlibiReport | 
         : warnings.length
           ? `Passed with ${warnings.length} warning(s)`
           : 'All steps passed',
-      component,
+      component: COMPONENT,
     };
   } else {
     const failIdx = named.findIndex((s) => s.error);
@@ -239,7 +249,7 @@ export async function buildReport(run: Run, dir: string): Promise<AlibiReport | 
       cause: a.cause,
       service: 'service' in a ? a.service : undefined,
       endpoint: 'endpoint' in a ? a.endpoint : undefined,
-      component,
+      component: COMPONENT,
     };
     // Steps after the failing one never ran.
     for (const s of steps) if (failIdx >= 0 && s.index > failIdx + 1) s.status = 'not reached';
@@ -255,23 +265,11 @@ export async function buildReport(run: Run, dir: string): Promise<AlibiReport | 
     };
   }
 
-  const p = run.params;
-  const report: AlibiReport = {
-    schemaVersion: 1,
-    run: {
-      id: run.id,
-      requestedBy: run.requestedBy,
-      test: p.test,
-      target: p.url ?? `${p.env} (${profileOf(p.env).baseUrl ?? 'no URL in config'})`,
-      env: p.env,
-      backend: profileOf(p.env).apiBaseUrl,
-      testsFrom: p.localPath ? `local folder ${p.localPath}` : `${p.repo} @ ${p.branch}`,
-      device: p.device,
-      note: p.note,
-      startedAt: run.startedAt,
-      finishedAt: new Date().toISOString(),
-      durationMs: Math.round(results.reduce((t, r) => t + r.duration, 0)),
-    },
+  const device = test.projectName ?? 'device';
+  return {
+    device,
+    label: labelOf(device),
+    durationMs: Math.round(results.reduce((t, r) => t + r.duration, 0)),
     result,
     steps,
     failure,
@@ -280,9 +278,58 @@ export async function buildReport(run: Run, dir: string): Promise<AlibiReport | 
     files: {
       trace: toRel(dir, attachments.find((a) => a.name === 'trace')?.path),
       video: toRel(dir, attachments.find((a) => a.name === 'video')?.path),
-      html: 'html/index.html',
-      pdf: 'report.pdf',
     },
+  };
+}
+
+// Worst first: the run's result is the worst device's.
+const SEVERITY: RunStatus[] = ['failed', 'couldnt_run', 'flaky', 'passed_with_warnings', 'passed'];
+
+function overall(sections: DeviceSection[]): Result {
+  const worst = [...sections].sort((a, b) => SEVERITY.indexOf(a.result.status) - SEVERITY.indexOf(b.result.status))[0]!;
+  if (sections.length === 1) return worst.result;
+  const ok = ['passed', 'passed_with_warnings'].includes(worst.result.status);
+  if (ok) {
+    const warned = sections.filter((s) => s.warnings.length).length;
+    return { ...worst.result, cause: `Passed on all ${sections.length} devices${warned ? `, with warnings on ${warned}` : ''}` };
+  }
+  const same = sections.filter((s) => s.result.status === worst.result.status).map((s) => s.label);
+  return { ...worst.result, cause: `${same.join(', ')}: ${worst.result.cause}` };
+}
+
+/** Builds report.json and report.pdf for a finished run. Returns the report, or null if nothing ran. */
+export async function buildReport(run: Run, dir: string): Promise<AlibiReport | null> {
+  const pwFile = resolve(dir, 'playwright-report.json');
+  if (!existsSync(pwFile)) return null;
+  const pw: PwReport = JSON.parse(readFileSync(pwFile, 'utf8'));
+  const order = devicesOf(run.params);
+  const sections = allTests(pw.suites)
+    .map((t) => deviceSection(t, dir))
+    .filter((s): s is DeviceSection => s !== null)
+    .sort((a, b) => order.indexOf(a.device) - order.indexOf(b.device));
+  if (!sections.length) return null;
+
+  const p = run.params;
+  const report: AlibiReport = {
+    schemaVersion: 2,
+    run: {
+      id: run.id,
+      requestedBy: run.requestedBy,
+      test: p.test,
+      target: p.url ?? `${p.env} (${profileOf(p.env).baseUrl ?? 'no URL in config'})`,
+      env: p.env,
+      backend: profileOf(p.env).apiBaseUrl,
+      testsFrom: p.localPath ? `local folder ${p.localPath}` : `${p.repo} @ ${p.branch}`,
+      devices: sections.map((s) => s.label),
+      note: p.note,
+      startedAt: run.startedAt,
+      finishedAt: new Date().toISOString(),
+      durationMs: sections.reduce((t, s) => t + s.durationMs, 0),
+    },
+    result: overall(sections),
+    devices: sections,
+    warnings: [...new Set(sections.flatMap((s) => s.warnings.map((w) => (sections.length > 1 ? `${s.label}: ${w}` : w))))],
+    files: { html: 'html/index.html', pdf: 'report.pdf' },
   };
 
   writeFileSync(resolve(dir, 'report.json'), JSON.stringify(report, null, 2));
@@ -300,40 +347,26 @@ function img(dir: string, rel?: string) {
   return `<img src="data:image/png;base64,${readFileSync(file).toString('base64')}">`;
 }
 
-function html(r: AlibiReport, dir: string) {
-  const ok = ['passed', 'passed_with_warnings'].includes(r.result.status);
-  const color = ok ? '#1a7f37' : r.result.status === 'flaky' ? '#9a6700' : '#cf222e';
-  const f = r.failure;
-  const rows = (xs: string[]) => (xs.length ? `<ul>${xs.map((x) => `<li>${x}</li>`).join('')}</ul>` : '<p class="muted">None</p>');
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
-    body{font:12px/1.45 -apple-system,Segoe UI,Arial,sans-serif;color:#1f2328;margin:28px}
-    h1{font-size:20px;margin:0 0 4px} h2{font-size:14px;margin:22px 0 8px;border-bottom:1px solid #d0d7de;padding-bottom:4px}
-    .status{display:inline-block;padding:3px 10px;border-radius:12px;color:#fff;background:${color};font-weight:600}
-    .label{font-size:15px;font-weight:600;margin:10px 0 2px} .muted{color:#656d76}
-    table{border-collapse:collapse;width:100%} td,th{border:1px solid #d0d7de;padding:4px 6px;text-align:left;vertical-align:top}
-    pre{white-space:pre-wrap;word-break:break-word;background:#f6f8fa;padding:8px;border-radius:6px;font-size:10.5px}
-    .step{page-break-inside:avoid;margin-bottom:12px} .step img{width:100%;border:1px solid #d0d7de;border-radius:4px}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  </style></head><body>
-    <h1>Alibi run #${r.run.id}: ${esc(r.run.test)}</h1>
-    <span class="status">${esc(r.result.status.replace(/_/g, ' '))}</span>
-    <div class="label">${esc(r.result.label)}${r.result.service ? ` (${esc(r.result.service)}${r.result.endpoint ? `: ${esc(r.result.endpoint)}` : ''})` : ''}</div>
-    <p>${esc(r.result.cause)}</p>
-    <table>
-      <tr><th>Tested on</th><td>${esc(r.run.target)}</td><th>Device</th><td>${esc(r.run.device)}</td></tr>
-      <tr><th>Backend</th><td colspan="3">${esc(r.run.backend ?? 'not recorded')}</td></tr>
-      <tr><th>Tests from</th><td>${esc(r.run.testsFrom)}</td><th>Run by</th><td>${esc(r.run.requestedBy)}</td></tr>
-      <tr><th>Started</th><td>${esc(r.run.startedAt ?? '')}</td><th>Duration</th><td>${(r.run.durationMs / 1000).toFixed(1)} s</td></tr>
-      <tr><th>Component</th><td colspan="3">${esc(r.result.component)}</td></tr>
-      ${r.run.note ? `<tr><th>Note</th><td colspan="3">${esc(r.run.note)}</td></tr>` : ''}
-    </table>
+const colorOf = (status: RunStatus) =>
+  ['passed', 'passed_with_warnings'].includes(status) ? '#1a7f37' : status === 'flaky' ? '#9a6700' : status === 'couldnt_run' ? '#656d76' : '#cf222e';
 
-    <h2>Steps</h2>
+const rows = (xs: string[]) => (xs.length ? `<ul>${xs.map((x) => `<li>${x}</li>`).join('')}</ul>` : '<p class="muted">None</p>');
+
+const labelLine = (res: Result) =>
+  `${esc(res.label)}${res.service ? ` (${esc(res.service)}${res.endpoint ? `: ${esc(res.endpoint)}` : ''})` : ''}`;
+
+function deviceHtml(d: DeviceSection, dir: string, many: boolean) {
+  const f = d.failure;
+  const phone = /android|iphone/i.test(d.device);
+  return `
+    ${many ? `<h2 class="device"><span class="dot" style="background:${colorOf(d.result.status)}"></span>${esc(d.label)}: ${esc(d.result.status.replace(/_/g, ' '))} <span class="muted">${(d.durationMs / 1000).toFixed(1)} s</span></h2>
+      <div class="label">${labelLine(d.result)}</div><p>${esc(d.result.cause)}</p>` : ''}
+    <h3>Steps</h3>
     <table><tr><th>#</th><th>Step</th><th>Result</th><th>Time</th></tr>
-      ${r.steps.map((s) => `<tr><td>${s.index}</td><td>${esc(s.name)}</td><td${s.status === 'skipped' ? ' class="muted"' : ''}>${s.status}${s.reason ? ` (${esc(s.reason)})` : ''}</td><td>${(s.durationMs / 1000).toFixed(1)} s</td></tr>`).join('')}
+      ${d.steps.map((s) => `<tr><td>${s.index}</td><td>${esc(s.name)}</td><td${s.status === 'skipped' ? ' class="muted"' : ''}>${s.status}${s.reason ? ` (${esc(s.reason)})` : ''}</td><td>${(s.durationMs / 1000).toFixed(1)} s</td></tr>`).join('')}
     </table>
 
-    ${f ? `<h2>Failure</h2>
+    ${f ? `<h3>Failure</h3>
       <p><b>Step:</b> ${esc(f.step)}</p>
       <pre>${esc(f.error)}</pre>
       ${f.earlierAttempt ? `<p class="muted">First attempt: ${esc(f.earlierAttempt)}</p>` : ''}
@@ -344,15 +377,50 @@ function html(r: AlibiReport, dir: string) {
       <p><b>Console errors</b></p>
       ${rows(f.consoleErrors.map((e) => `${esc(e.text)}${e.location ? ` <span class="muted">${esc(e.location)}</span>` : ''}`))}` : ''}
 
-    <h2>Warnings</h2>
-    ${rows(r.warnings.map(esc))}
+    <h3>Warnings</h3>
+    ${rows(d.warnings.map(esc))}
 
-    ${r.notes.length ? `<h2>Notes</h2>${rows(r.notes.map((n) => `${esc(n.type)}: ${esc(n.description ?? '')}`))}` : ''}
+    ${d.notes.length ? `<h3>Notes</h3>${rows(d.notes.map((n) => `${esc(n.type)}: ${esc(n.description ?? '')}`))}` : ''}
 
-    <h2>Screenshots</h2>
-    <div class="grid">
-      ${r.steps.filter((s) => s.screenshot).map((s) => `<div class="step"><b>${s.index}. ${esc(s.name)}</b> <span class="muted">(${s.status})</span>${img(dir, s.screenshot)}</div>`).join('')}
-    </div>
+    <h3>Screenshots</h3>
+    <div class="grid${phone ? ' phone' : ''}">
+      ${d.steps.filter((s) => s.screenshot).map((s) => `<div class="step"><b>${s.index}. ${esc(s.name)}</b> <span class="muted">(${s.status})</span>${img(dir, s.screenshot)}</div>`).join('')}
+    </div>`;
+}
+
+function html(r: AlibiReport, dir: string) {
+  const many = r.devices.length > 1;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    body{font:12px/1.45 -apple-system,Segoe UI,Arial,sans-serif;color:#1f2328;margin:28px}
+    h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:26px 0 6px;border-bottom:2px solid #d0d7de;padding-bottom:4px}
+    h3{font-size:13px;margin:18px 0 8px;border-bottom:1px solid #d0d7de;padding-bottom:3px}
+    h2.device ~ h2.device{page-break-before:always} .dot{display:inline-block;width:10px;height:10px;border-radius:5px;margin-right:6px}
+    .status{display:inline-block;padding:3px 10px;border-radius:12px;color:#fff;background:${colorOf(r.result.status)};font-weight:600}
+    .label{font-size:15px;font-weight:600;margin:10px 0 2px} .muted{color:#656d76}
+    table{border-collapse:collapse;width:100%} td,th{border:1px solid #d0d7de;padding:4px 6px;text-align:left;vertical-align:top}
+    pre{white-space:pre-wrap;word-break:break-word;background:#f6f8fa;padding:8px;border-radius:6px;font-size:10.5px}
+    .step{page-break-inside:avoid;margin-bottom:12px} .step img{width:100%;border:1px solid #d0d7de;border-radius:4px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px} .grid.phone{grid-template-columns:1fr 1fr 1fr 1fr}
+  </style></head><body>
+    <h1>Alibi run #${r.run.id}: ${esc(r.run.test)}</h1>
+    <span class="status">${esc(r.result.status.replace(/_/g, ' '))}</span>
+    <div class="label">${labelLine(r.result)}</div>
+    <p>${esc(r.result.cause)}</p>
+    <table>
+      <tr><th>Tested on</th><td>${esc(r.run.target)}</td><th>Devices</th><td>${esc(r.run.devices.join(', '))}</td></tr>
+      <tr><th>Backend</th><td colspan="3">${esc(r.run.backend ?? 'not recorded')}</td></tr>
+      <tr><th>Tests from</th><td>${esc(r.run.testsFrom)}</td><th>Run by</th><td>${esc(r.run.requestedBy)}</td></tr>
+      <tr><th>Started</th><td>${esc(r.run.startedAt ?? '')}</td><th>Duration</th><td>${(r.run.durationMs / 1000).toFixed(1)} s</td></tr>
+      <tr><th>Component</th><td colspan="3">${esc(r.result.component)}</td></tr>
+      ${r.run.note ? `<tr><th>Note</th><td colspan="3">${esc(r.run.note)}</td></tr>` : ''}
+    </table>
+
+    ${many ? `<h3>Devices</h3>
+      <table><tr><th>Device</th><th>Result</th><th>Team responsible / cause</th><th>Time</th></tr>
+        ${r.devices.map((d) => `<tr><td>${esc(d.label)}</td><td style="color:${colorOf(d.result.status)};font-weight:600">${esc(d.result.status.replace(/_/g, ' '))}</td><td>${labelLine(d.result)}</td><td>${(d.durationMs / 1000).toFixed(1)} s</td></tr>`).join('')}
+      </table>` : ''}
+
+    ${r.devices.map((d) => deviceHtml(d, dir, many)).join('')}
     <p class="muted">Trace, video and the full Playwright report are stored with run #${r.run.id}.</p>
   </body></html>`;
 }

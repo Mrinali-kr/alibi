@@ -27,7 +27,10 @@ export type RunParams = {
   repo: string;
   branch: string;
   test: string;
-  device: 'desktop' | 'mobile';
+  /** Device ids from config/devices.json, tested one after another. */
+  devices?: string[] | undefined;
+  /** Older runs: 'desktop' or 'mobile'. */
+  device?: string | undefined;
   note?: string;
   localPath?: string;
 };
