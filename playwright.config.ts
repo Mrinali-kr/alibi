@@ -9,7 +9,7 @@ export default defineConfig({
   outputDir: `${runDir}/output`,
   reporter: [
     ['list'],
-    ['json', { outputFile: `${runDir}/report.json` }],
+    ['json', { outputFile: `${runDir}/playwright-report.json` }],
     ['html', { outputFolder: `${runDir}/html`, open: 'never' }],
   ],
   use: {

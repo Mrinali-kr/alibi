@@ -6,6 +6,7 @@
       "phoneLength": 10,
       "otp": "1001",
       "pin": "1001"
-    }
+    },
+    "apiBaseUrl": "https://s1-loom.one.phoenix.sustvest.in"
   }
 }

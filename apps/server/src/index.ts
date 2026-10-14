@@ -104,7 +104,7 @@ app.get<{ Querystring: { repo: string; branch?: string; localPath?: string } }>(
   const { repo, branch = 'main', localPath } = req.query;
   if (!repo && !localPath) return reply.code(400).send({ error: 'Give repo (and branch) or localPath' });
   try {
-    return await readManifest({ repo, branch, localPath });
+    return await readManifest({ repo, branch, ...(localPath ? { localPath } : {}) });
   } catch (err) {
     return reply.code(502).send({ error: (err as Error).message });
   }

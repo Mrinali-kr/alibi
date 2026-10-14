@@ -8,3 +8,8 @@ playwright-report/
 .runs/
 .runs/
 data/
+
+reports/
+data/
+.runs/
+.env

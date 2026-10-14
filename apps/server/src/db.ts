@@ -33,9 +33,14 @@ export type RunParams = {
 };
 
 export type RunSummary = {
-  durationMs?: number;
+  label?: string | undefined;
+  teamResponsible?: 'BE' | 'FE' | null | undefined;
+  service?: string | undefined;
+  cause?: string | undefined;
+  pdf?: string | undefined;
+  durationMs?: number | undefined;
   warnings: string[];
-  error?: string;
+  error?: string | undefined;
   annotations?: { type: string; description?: string }[];
 };
 

@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 import { ROOT, runDir } from './paths.ts';
 import { fetchTests } from './sources.ts';
 import { endLog, writeLog } from './logs.ts';
-import { setStatus, setSummary, type Run, type RunStatus, type RunSummary } from './db.ts';
+import { getRun, setStatus, setSummary, type Run, type RunStatus, type RunSummary } from './db.ts';
+import { buildReport } from './report.ts';
 
 const MAX_RUN_MS = 30 * 60 * 1000;
 
@@ -50,7 +51,7 @@ function allTests(suites: PwSuite[] = []): PwTest[] {
 
 /** Turns Playwright's JSON report into Alibi's result and summary. */
 export function readResult(dir: string): { status: RunStatus; summary: RunSummary } {
-  const file = resolve(dir, 'report.json');
+  const file = resolve(dir, 'playwright-report.json');
   if (!existsSync(file)) {
     return { status: 'couldnt_run', summary: { warnings: [], error: 'Playwright produced no report' } };
   }
@@ -139,6 +140,22 @@ export async function executeRun(run: Run) {
     });
   }
   setStatus(id, 'writing_report');
-  const { status, summary } = readResult(dir);
+  let { status, summary } = readResult(dir);
+  try {
+    const report = await buildReport(getRun(id) ?? run, dir);
+    if (report) {
+      status = report.result.status;
+      summary = {
+        ...summary,
+        label: report.result.label,
+        teamResponsible: report.result.teamResponsible,
+        service: report.result.service,
+        cause: report.result.cause,
+        pdf: `/reports/${id}/report.pdf`,
+      };
+    }
+  } catch (err) {
+    writeLog(id, `\nCould not build the report: ${(err as Error).message}\n`);
+  }
   finish(status, summary);
 }
